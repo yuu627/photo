@@ -76,12 +76,14 @@
 
     <div class="card" style="margin-top:20px;">
       <h2>スキャン履歴（このセッション中のみ・端末に保存）</h2>
+      <div class="table-scroll">
       <table class="history" id="historyTable">
         <thead>
           <tr><th>写真</th><th>伝票No.</th><th>時刻</th><th>バーコード</th><th>ラベル</th></tr>
         </thead>
         <tbody></tbody>
       </table>
+      </div>
       <div id="historyEmpty" class="empty-hint" style="margin-top:10px;">まだ記録がありません。</div>
     </div>
   </section>
@@ -93,12 +95,14 @@
       <p style="color:var(--muted); font-size:13px;">
         正式な対応表は <code>mapping.js</code> ファイルに記載します。写真が届いたら、この一覧を書き換えて反映します（ファイルの書き方は README.md 参照）。
       </p>
+      <div class="table-scroll">
       <table class="mapping-table" id="mappingTable">
         <thead>
           <tr><th>写真</th><th>バーコード値</th><th>ラベル</th><th>種別</th></tr>
         </thead>
         <tbody></tbody>
       </table>
+      </div>
     </div>
 
     <div class="card" style="margin-top:20px;">
@@ -125,6 +129,17 @@
       <div class="controls-row">
         <button id="tempAddBtn" class="primary">登録する</button>
         <button id="tempClearAllBtn" class="ghost">一時登録をすべて削除</button>
+      </div>
+
+      <div class="export-box">
+        <p>
+          <strong>スマホなど他の端末でも同じ写真を表示したい場合</strong>は、下のボタンで
+          <code>mapping.js</code> と <code>photos-data.js</code> を書き出して、GitHubの同名ファイルに
+          上書きアップロードしてください。今の対応表（mapping.js）＋この一時登録の内容がすべて
+          まとまった状態でダウンロードされます。アップロードして数分待てば、スマホ含めどの端末で
+          開いても同じ写真が表示されるようになります。
+        </p>
+        <button id="exportBtn" class="primary">mapping.js と photos-data.js を書き出す</button>
       </div>
     </div>
   </section>

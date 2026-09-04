@@ -213,6 +213,76 @@
     }
   });
 
+  /*
+   * 「一時登録」（このブラウザだけのlocalStorage）の内容を、
+   * 正式な対応表ファイル（mapping.js・photos-data.js）にまとめて書き出す。
+   * これをGitHubにアップロードし直すことで、PC・スマホなどどの端末で開いても
+   * 同じ登録内容・同じ写真が表示されるようになる（localStorageは端末ごとに別なので、
+   * これをしない限りスマホには反映されない）。
+   */
+  function buildExportFiles() {
+    const tempBarcodes = new Set(tempMap.map((m) => (m.barcode || "").trim()));
+    // 一時登録と同じバーコード値が既存mapping.jsにもある場合は、一時登録の内容を優先して置き換える
+    const staticEntries = (window.BARCODE_MAP || []).filter((e) => !tempBarcodes.has((e.barcode || "").trim()));
+
+    const newPhotoData = {};
+    const tempEntries = tempMap.map((m) => {
+      const keys = m.photos.map((dataUrl, idx) => {
+        const key = `photos/temp_${m.id}_${idx}.jpg`;
+        newPhotoData[key] = dataUrl;
+        return key;
+      });
+      const entry = { barcode: m.barcode, label: m.label || "" };
+      if (keys.length === 1) entry.photo = keys[0];
+      else entry.photos = keys;
+      return entry;
+    });
+
+    const mergedMap = [...staticEntries, ...tempEntries];
+    const mergedPhotoData = Object.assign({}, window.PHOTO_DATA || {}, newPhotoData);
+
+    const mappingJsText =
+      `/* mapping.js\n` +
+      ` * このファイルはアプリの「対応表」タブから書き出されました（${formatDate(new Date())}）。\n` +
+      ` * バーコード⇔写真の対応表です。書き方の詳細はREADME.mdを参照してください。\n` +
+      ` * 直接編集する場合も、この配列の形式（barcode / photo または photos / label）を保ってください。\n` +
+      ` */\n\n` +
+      `window.BARCODE_MAP = ${JSON.stringify(mergedMap, null, 2)};\n`;
+
+    const photosDataText =
+      `/* 自動生成ファイル: アプリの「対応表」タブから書き出されました（${formatDate(new Date())}）。\n` +
+      ` * 手動編集しないでください。photosフォルダの画像を追加した場合は\n` +
+      ` * tools/build_photos_data.py を実行して作り直してください。\n` +
+      ` */\n` +
+      `window.PHOTO_DATA = ${JSON.stringify(mergedPhotoData, null, 2)};\n`;
+
+    return { mappingJsText, photosDataText };
+  }
+
+  function downloadTextFile(filename, text) {
+    const blob = new Blob([text], { type: "text/javascript;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+
+  document.getElementById("exportBtn").addEventListener("click", () => {
+    if (tempMap.length === 0 && (!window.BARCODE_MAP || window.BARCODE_MAP.length === 0)) {
+      alert("書き出す内容がありません。");
+      return;
+    }
+    const { mappingJsText, photosDataText } = buildExportFiles();
+    downloadTextFile("mapping.js", mappingJsText);
+    // 2つ目のダウンロードが同時だとブロックされることがあるので少し間隔を空ける
+    setTimeout(() => downloadTextFile("photos-data.js", photosDataText), 400);
+    setTimeout(() => {
+      alert("mapping.js と photos-data.js をダウンロードしました。GitHubの同じファイルに上書きアップロード（Add file → Upload files）してください。反映されたら、②の「一時登録をすべて削除」でこのブラウザ内の一時登録を消しておくと整理できます。");
+    }, 500);
+  });
+
   document.getElementById("tempClearAllBtn").addEventListener("click", () => {
     if (tempMap.length === 0) return;
     if (!confirm("一時登録をすべて削除しますか？")) return;
