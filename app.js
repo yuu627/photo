@@ -221,12 +221,15 @@
    * これをしない限りスマホには反映されない）。
    */
   function buildExportFiles() {
-    const tempBarcodes = new Set(tempMap.map((m) => (m.barcode || "").trim()));
+    // 壊れた／古い形式のデータが紛れていても書き出しごと失敗しないよう、事前に除外しておく
+    const validTemp = tempMap.filter((m) => m && m.barcode && Array.isArray(m.photos) && m.photos.length > 0);
+
+    const tempBarcodes = new Set(validTemp.map((m) => (m.barcode || "").trim()));
     // 一時登録と同じバーコード値が既存mapping.jsにもある場合は、一時登録の内容を優先して置き換える
     const staticEntries = (window.BARCODE_MAP || []).filter((e) => !tempBarcodes.has((e.barcode || "").trim()));
 
     const newPhotoData = {};
-    const tempEntries = tempMap.map((m) => {
+    const tempEntries = validTemp.map((m) => {
       const keys = m.photos.map((dataUrl, idx) => {
         const key = `photos/temp_${m.id}_${idx}.jpg`;
         newPhotoData[key] = dataUrl;
@@ -265,22 +268,71 @@
     const link = document.createElement("a");
     link.href = url;
     link.download = filename;
+    link.rel = "noopener";
+    link.style.display = "none";
+    // 一部のブラウザ（Safari等）は、DOMに挿入されていないリンクのclick()を
+    // 無視することがあるため、必ず一度DOMに追加してからクリックする
+    document.body.appendChild(link);
     link.click();
+    document.body.removeChild(link);
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   }
 
+  // 万一ダウンロードが動かない環境向けに、テキストを別タブに表示するフォールバック
+  function openTextInNewTab(filename, text) {
+    const w = window.open("", "_blank");
+    if (!w) return false;
+    const escaped = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    w.document.write(
+      `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${filename}</title></head>` +
+      `<body style="margin:0;padding:16px;font-family:monospace;white-space:pre-wrap;word-break:break-all;">` +
+      `<p style="font-family:sans-serif;background:#fef6e7;padding:8px;border-radius:6px;">` +
+      `ダウンロードが動かなかったため、ここに ${filename} の内容を表示しています。` +
+      `このページ全体を選択してコピーし、テキストファイルとして保存してから ${filename} という名前でアップロードしてください。` +
+      `</p><hr>${escaped}</body></html>`
+    );
+    w.document.close();
+    return true;
+  }
+
   document.getElementById("exportBtn").addEventListener("click", () => {
-    if (tempMap.length === 0 && (!window.BARCODE_MAP || window.BARCODE_MAP.length === 0)) {
-      alert("書き出す内容がありません。");
-      return;
+    try {
+      if (tempMap.length === 0 && (!window.BARCODE_MAP || window.BARCODE_MAP.length === 0)) {
+        alert("書き出す内容がありません。");
+        return;
+      }
+      const { mappingJsText, photosDataText } = buildExportFiles();
+
+      let downloadFailed = false;
+      try {
+        downloadTextFile("mapping.js", mappingJsText);
+      } catch (e1) {
+        downloadFailed = true;
+      }
+      setTimeout(() => {
+        try {
+          downloadTextFile("photos-data.js", photosDataText);
+        } catch (e2) {
+          downloadFailed = true;
+        }
+        setTimeout(() => {
+          if (downloadFailed) {
+            alert("自動ダウンロードがうまく動作しませんでした。代わりにファイルの中身を新しいタブに開くので、そこからコピーして保存してください。");
+            openTextInNewTab("mapping.js", mappingJsText);
+            openTextInNewTab("photos-data.js", photosDataText);
+          } else {
+            alert(
+              "mapping.js と photos-data.js をダウンロードしました。\n" +
+              "PCの「ダウンロード」フォルダに保存されているはずです（保存先を尋ねる設定の場合はそのダイアログをご確認ください）。\n" +
+              "見つかったら、GitHubの同じファイルに上書きアップロードしてください。反映されたら、②の「一時登録をすべて削除」でこのブラウザ内の一時登録を消しておくと整理できます。"
+            );
+          }
+        }, 300);
+      }, 400);
+    } catch (e) {
+      alert("書き出し中にエラーが発生しました: " + e.message);
+      console.error(e);
     }
-    const { mappingJsText, photosDataText } = buildExportFiles();
-    downloadTextFile("mapping.js", mappingJsText);
-    // 2つ目のダウンロードが同時だとブロックされることがあるので少し間隔を空ける
-    setTimeout(() => downloadTextFile("photos-data.js", photosDataText), 400);
-    setTimeout(() => {
-      alert("mapping.js と photos-data.js をダウンロードしました。GitHubの同じファイルに上書きアップロード（Add file → Upload files）してください。反映されたら、②の「一時登録をすべて削除」でこのブラウザ内の一時登録を消しておくと整理できます。");
-    }, 500);
   });
 
   document.getElementById("tempClearAllBtn").addEventListener("click", () => {
