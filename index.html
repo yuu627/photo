@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>バーコード連動レシート写真システム（試作）</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<header class="app-header">
+  <h1>📷 バーコード連動レシート写真システム（試作）</h1>
+  <p>PCのカメラでバーコードを読み取り、対応する写真からレシート印字用データを作成・確認します。プリンター／バーコードリーダー未導入のための代替プロトタイプです。</p>
+</header>
+
+<nav class="tabs">
+  <button class="tab-btn active" data-tab="scan">① スキャン確認</button>
+  <button class="tab-btn" data-tab="mapping">② 対応表</button>
+  <button class="tab-btn" data-tab="testgen">③ テスト用バーコード作成</button>
+</nav>
+
+<main>
+
+  <!-- ============ TAB 1: SCAN ============ -->
+  <section id="tab-scan" class="tab-panel active">
+    <div class="grid-2">
+      <div class="card">
+        <h2>カメラでバーコードを読み取る</h2>
+        <video id="camera" autoplay muted playsinline></video>
+        <div class="controls-row">
+          <select id="cameraSelect"></select>
+          <button id="startBtn" class="primary">カメラ開始</button>
+          <button id="stopBtn" disabled>停止</button>
+        </div>
+        <div id="scanStatus" class="status-line">カメラ未起動です。「カメラ開始」を押してください。</div>
+
+        <div class="field-row" style="margin-top:14px;">
+          <label>レシート見出し（店舗名・タイトルなど）</label>
+          <input type="text" id="receiptTitle" value="PHOTO RECEIPT" />
+        </div>
+        <div class="two-col">
+          <div class="field-row">
+            <label>用紙幅</label>
+            <select id="paperWidth">
+              <option value="384">58mm ロール（384px相当）</option>
+              <option value="576">80mm ロール（576px相当）</option>
+            </select>
+          </div>
+          <div class="field-row">
+            <label>印字モード</label>
+            <select id="printMode">
+              <option value="color">カラーのまま</option>
+              <option value="gray">グレースケール</option>
+              <option value="mono">白黒2値（感熱プリンター風）</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>レシート プレビュー</h2>
+        <div id="receiptEmptyHint" class="empty-hint">
+          バーコードを読み取ると、ここにレシート印字イメージのプレビューが表示されます。
+        </div>
+        <div id="receiptWrap" class="receipt-wrap" style="display:none;">
+          <canvas id="receiptCanvas"></canvas>
+          <div class="receipt-actions">
+            <button id="confirmBtn" class="primary">これでOK（履歴に記録）</button>
+            <button id="retryBtn">やり直す</button>
+            <button id="downloadBtn">PNGをダウンロード</button>
+            <button id="openInTabBtn" class="ghost">新しいタブで開く（iPhoneは長押しで保存）</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:20px;">
+      <h2>スキャン履歴（このセッション中のみ・端末に保存）</h2>
+      <table class="history" id="historyTable">
+        <thead>
+          <tr><th>写真</th><th>伝票No.</th><th>時刻</th><th>バーコード</th><th>ラベル</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div id="historyEmpty" class="empty-hint" style="margin-top:10px;">まだ記録がありません。</div>
+    </div>
+  </section>
+
+  <!-- ============ TAB 2: MAPPING ============ -->
+  <section id="tab-mapping" class="tab-panel">
+    <div class="card">
+      <h2>登録済みの対応表（バーコード ⇔ 写真）</h2>
+      <p style="color:var(--muted); font-size:13px;">
+        正式な対応表は <code>mapping.js</code> ファイルに記載します。写真が届いたら、この一覧を書き換えて反映します（ファイルの書き方は README.md 参照）。
+      </p>
+      <table class="mapping-table" id="mappingTable">
+        <thead>
+          <tr><th>写真</th><th>バーコード値</th><th>ラベル</th><th>種別</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top:20px;">
+      <h2>一時登録（ブラウザ保存・写真は複数枚OK）</h2>
+      <p style="color:var(--muted); font-size:13px;">
+        本番の対応表は mapping.js に記載する運用ですが、写真がまだ届いていない場合など、動作確認のためにブラウザ内だけで一時的に紐付けを追加できます。
+        <strong>このPC・このブラウザに保存されるので、ページを再読み込みしても消えません。</strong>
+        （別のPC・別のブラウザには引き継がれません。写真を削除したい場合は下の一覧の「×」または「登録を削除」から消せます。）
+      </p>
+      <div class="two-col">
+        <div class="field-row">
+          <label>バーコード値</label>
+          <input type="text" id="tempBarcode" placeholder="例: TEST-0001" />
+        </div>
+        <div class="field-row">
+          <label>ラベル（任意）</label>
+          <input type="text" id="tempLabel" placeholder="例: テスト商品" />
+        </div>
+      </div>
+      <div class="field-row">
+        <label>写真ファイル（複数選択可）</label>
+        <input type="file" id="tempPhoto" accept="image/*" multiple />
+      </div>
+      <div class="controls-row">
+        <button id="tempAddBtn" class="primary">登録する</button>
+        <button id="tempClearAllBtn" class="ghost">一時登録をすべて削除</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ TAB 3: TEST BARCODE GENERATOR ============ -->
+  <section id="tab-testgen" class="tab-panel">
+    <div class="card">
+      <h2>テスト用バーコードを作成する</h2>
+      <p style="color:var(--muted); font-size:13px;">
+        まだバーコードリーダーや実物のバーコードが無い場合、ここで作成したバーコードをスマホ画面や別モニターに表示し、①のタブでPCのカメラから読み取ってテストできます。印刷も可能です。
+      </p>
+      <div class="two-col">
+        <div class="field-row">
+          <label>バーコードに埋め込む値</label>
+          <input type="text" id="genValue" value="SAMPLE-0001" />
+        </div>
+        <div class="field-row">
+          <label>形式</label>
+          <select id="genFormat">
+            <option value="CODE128">CODE128（任意の文字列・推奨）</option>
+            <option value="EAN13">EAN-13（数字12〜13桁）</option>
+            <option value="UPC">UPC-A（数字11〜12桁）</option>
+            <option value="CODE39">CODE39</option>
+          </select>
+        </div>
+      </div>
+      <div class="controls-row">
+        <button id="genBtn" class="primary">バーコードを作成</button>
+        <button id="genSample1" class="ghost">サンプル1</button>
+        <button id="genSample2" class="ghost">サンプル2</button>
+        <button id="genSample3" class="ghost">サンプル3</button>
+      </div>
+      <div id="genStatus" class="status-line" style="display:none;"></div>
+      <div style="margin-top:16px; text-align:center;">
+        <canvas id="genCanvas"></canvas>
+      </div>
+      <div class="controls-row" style="justify-content:center;">
+        <button id="genDownload" style="display:none;">画像をダウンロード</button>
+        <button id="genPrint" style="display:none;">印刷する</button>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="note">
+  試作プロトタイプ／PCブラウザで完結します（サーバー不要）。カメラ映像や写真は外部に送信されません。
+</footer>
+
+<!-- 対応表（本番はここを書き換える） -->
+<script src="mapping.js"></script>
+
+<!-- photosフォルダの画像をbase64化したもの（tools/build_photos_data.py で自動生成）
+     レシート画像のPNG保存や白黒/グレースケール表示でエラーにならないようにするための仕組みです -->
+<script src="photos-data.js"></script>
+
+<!-- 外部ライブラリ（バーコード読み取り・生成） -->
+<script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.20.0/umd/index.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+
+<script src="app.js"></script>
+</body>
+</html>
