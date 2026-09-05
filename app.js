@@ -876,7 +876,7 @@
     y += 4 + 8;                                // 区切り線＋余白
 
     items.forEach((it, ii) => {
-      if (it.label) y += textFont + 6;
+      if (it.label) y += textFont + 6 + lineGap * 2; // ラベル(タイトル)と写真の間の余白
       itemPhotoSizes[ii].forEach((s, pi) => {
         y += s.h;
         y += captionFont + 4;
@@ -944,6 +944,7 @@
         ctx.fillStyle = "#111";
         cy += textFont + 6;
         ctx.fillText(it.label, paperWidth / 2, cy);
+        cy += lineGap * 2; // ラベル(タイトル)と写真の間の余白
       }
 
       const imgs = itemImgs[ii];
