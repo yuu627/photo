@@ -40,9 +40,14 @@
         <p style="color:var(--muted); font-size:12px; margin-top:6px;">
           カメラを止めずに、バーコードを次々読み取れます。読み取るたびに下の「スキャン中の一覧」に
           追加されます。読み取り終わったら「レシートを作成」でまとめて1枚のレシートにできます。<br>
-          <strong>読み取りやすくするコツ：</strong>バーコードを枠の中に、なるべく大きく・まっすぐ・
-          ピントが合う距離（10〜20cm程度）で映してください。暗い場所では上の「💡 ライト」も
-          お使いください。
+          <strong>読み取りやすくするコツ：</strong>バーコードを枠の中に、なるべく大きく・まっすぐ映してください。
+          距離は20〜30cm程度から少しずつ近づけて、ピントが合う位置を探すのがおすすめです
+          （近づけすぎるとピントが合わず、かえって読み取りにくくなることがあります）。暗い場所では
+          上の「💡 ライト」もお使いください。<br>
+          <strong>スマホなど別の画面に表示したバーコードを読み取る場合</strong>は、画面の画素とカメラの
+          画素が干渉して縞模様（モアレ）が出て読み取りにくくなることがあります。画面の明るさを上げる、
+          バーコードを大きく表示する、少し距離を離してみる、のいずれかで改善することが多いです。
+          （実際の運用では印刷したバーコードを使うため、この現象は起こりにくくなります。）
         </p>
 
         <div class="field-row" style="margin-top:10px;">
@@ -187,7 +192,15 @@
     <div class="card">
       <h2>テスト用バーコードを作成する</h2>
       <p style="color:var(--muted); font-size:13px;">
-        まだバーコードリーダーや実物のバーコードが無い場合、ここで作成したバーコードをスマホ画面や別モニターに表示し、①のタブでPCのカメラから読み取ってテストできます。印刷も可能です。
+        まだバーコードリーダーや実物のバーコードが無い場合、ここで作成したバーコードをスマホ画面や別モニターに表示し、①のタブでカメラから読み取ってテストできます。印刷も可能です。
+      </p>
+      <p style="color:var(--accent-dark); font-size:13px; background:#eef4ff; padding:8px 10px; border-radius:8px;">
+        💡 <strong>スマホのカメラで読み取りにくい場合は「QRコード」がおすすめです。</strong>
+        QRコードはもともとカメラで読み取ることを前提に設計されており、多少ボケていたり
+        画面のモアレで一部が欠けていても正しく読み取れる仕組み（誤り訂正）を持っているため、
+        1次元バーコードよりもカメラでの読み取りに強いです。バーコードの値自体を紐付けに
+        使っているだけなので、QRコードに変えても対応表（mapping.js・一時登録）の仕組みは
+        そのまま使えます。
       </p>
       <div class="two-col">
         <div class="field-row">
@@ -197,18 +210,20 @@
         <div class="field-row">
           <label>形式</label>
           <select id="genFormat">
-            <option value="CODE128">CODE128（任意の文字列・推奨）</option>
-            <option value="EAN13">EAN-13（数字12〜13桁）</option>
-            <option value="UPC">UPC-A（数字11〜12桁）</option>
-            <option value="CODE39">CODE39</option>
+            <option value="QRCODE">QRコード（推奨・カメラでの読み取りに強い）</option>
+            <option value="CODE128">CODE128（1次元・任意の文字列）</option>
+            <option value="EAN13">EAN-13（1次元・数字12〜13桁）</option>
+            <option value="UPC">UPC-A（1次元・数字11〜12桁）</option>
+            <option value="CODE39">CODE39（1次元）</option>
           </select>
         </div>
       </div>
       <div class="controls-row">
         <button id="genBtn" class="primary">バーコードを作成</button>
-        <button id="genSample1" class="ghost">サンプル1</button>
-        <button id="genSample2" class="ghost">サンプル2</button>
-        <button id="genSample3" class="ghost">サンプル3</button>
+        <button id="genSample1" class="ghost">サンプル1（QR）</button>
+        <button id="genSample2" class="ghost">サンプル2（QR）</button>
+        <button id="genSample3" class="ghost">サンプル3（QR）</button>
+        <button id="genSample1Linear" class="ghost">サンプル1（1次元）</button>
       </div>
       <div id="genStatus" class="status-line" style="display:none;"></div>
       <div style="margin-top:16px; text-align:center;">
@@ -237,6 +252,8 @@
 <!-- 外部ライブラリ（バーコード読み取り・生成） -->
 <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.20.0/umd/index.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+<!-- QRコード生成用（読み取り側はZXingが標準でQRコードにも対応済みのため追加ライブラリ不要） -->
+<script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 
 <script src="app.js"></script>
 </body>

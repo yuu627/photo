@@ -366,8 +366,11 @@
     // 認識してしまう「誤読（クロスフォーマット誤検出）」を起こしやすいため対象から外している。
     // 一般的な商品バーコード(JAN/EAN/UPC/CODE128/CODE39)であればこれで十分カバーできる。
     // 実際にCODABARやITFのバーコードを読み取る必要が出てきた場合は、ここに戻してください。
+    // QR_CODEは検出パターン（3隅の四角い目印）が1次元バーコードと全く異なり誤検出の
+    // リスクがほぼ無いため追加している。QRコードは誤り訂正機能を持ち、多少のボケや
+    // 画面のモアレがあっても読み取れることが多く、カメラでの読み取りに強い。
     hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-      F.CODE_128, F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_39,
+      F.CODE_128, F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_39, F.QR_CODE,
     ]);
     hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
     // 第2引数は読み取り試行の間隔(ms)。既定値の500msだと反応が遅く、フレームを
@@ -1019,28 +1022,60 @@
   const genDownload = document.getElementById("genDownload");
   const genPrint = document.getElementById("genPrint");
 
+  function showGenError(msg) {
+    genStatus.style.display = "block";
+    genStatus.className = "status-line err";
+    genStatus.textContent = msg;
+    genDownload.style.display = "none";
+    genPrint.style.display = "none";
+  }
+
+  function showGenSuccess() {
+    genStatus.style.display = "none";
+    genDownload.style.display = "inline-block";
+    genPrint.style.display = "inline-block";
+  }
+
   function generateTestBarcode() {
     const value = document.getElementById("genValue").value.trim();
     const format = document.getElementById("genFormat").value;
     if (!value) { alert("値を入力してください。"); return; }
+
+    if (format === "QRCODE") {
+      if (typeof QRCode === "undefined") {
+        showGenError(
+          "QRコード生成ライブラリの読み込みに失敗しました（インターネット接続をご確認ください）。" +
+          "代わりに、お使いのブラウザで他のQRコード作成サイトから同じ値のQRコードを作成して" +
+          "印刷・表示していただいても、このアプリの読み取り側（①タブ）はそのまま使えます。"
+        );
+        return;
+      }
+      // QRCode.toCanvas は指定したcanvasに直接描画し、canvasの幅・高さも自動調整してくれる
+      QRCode.toCanvas(genCanvas, value, { width: 260, margin: 2 }, (err) => {
+        if (err) {
+          showGenError("QRコードを作成できませんでした: " + err.message);
+        } else {
+          showGenSuccess();
+        }
+      });
+      return;
+    }
+
     try {
       JsBarcode(genCanvas, value, { format, displayValue: true, fontSize: 18, height: 90, margin: 12 });
-      genStatus.style.display = "none";
-      genDownload.style.display = "inline-block";
-      genPrint.style.display = "inline-block";
+      showGenSuccess();
     } catch (e) {
-      genStatus.style.display = "block";
-      genStatus.className = "status-line err";
-      genStatus.textContent = "バーコードを作成できませんでした。形式と入力値を確認してください（例: EAN-13は12〜13桁の数字）。";
-      genDownload.style.display = "none";
-      genPrint.style.display = "none";
+      showGenError("バーコードを作成できませんでした。形式と入力値を確認してください（例: EAN-13は12〜13桁の数字）。");
     }
   }
 
   document.getElementById("genBtn").addEventListener("click", generateTestBarcode);
-  document.getElementById("genSample1").addEventListener("click", () => { document.getElementById("genValue").value = "SAMPLE-0001"; document.getElementById("genFormat").value = "CODE128"; generateTestBarcode(); });
-  document.getElementById("genSample2").addEventListener("click", () => { document.getElementById("genValue").value = "SAMPLE-0002"; document.getElementById("genFormat").value = "CODE128"; generateTestBarcode(); });
-  document.getElementById("genSample3").addEventListener("click", () => { document.getElementById("genValue").value = "SAMPLE-0003"; document.getElementById("genFormat").value = "CODE128"; generateTestBarcode(); });
+  // サンプル1〜3は、カメラでの読み取りに強い「QRコード」で作成する
+  document.getElementById("genSample1").addEventListener("click", () => { document.getElementById("genValue").value = "SAMPLE-0001"; document.getElementById("genFormat").value = "QRCODE"; generateTestBarcode(); });
+  document.getElementById("genSample2").addEventListener("click", () => { document.getElementById("genValue").value = "SAMPLE-0002"; document.getElementById("genFormat").value = "QRCODE"; generateTestBarcode(); });
+  document.getElementById("genSample3").addEventListener("click", () => { document.getElementById("genValue").value = "SAMPLE-0003"; document.getElementById("genFormat").value = "QRCODE"; generateTestBarcode(); });
+  // 比較用に、従来の1次元バーコード（CODE128）版のサンプルも作れるようにしておく
+  document.getElementById("genSample1Linear").addEventListener("click", () => { document.getElementById("genValue").value = "SAMPLE-0001"; document.getElementById("genFormat").value = "CODE128"; generateTestBarcode(); });
 
   genDownload.addEventListener("click", () => {
     const link = document.createElement("a");
