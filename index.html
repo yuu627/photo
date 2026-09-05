@@ -26,17 +26,32 @@
     <div class="grid-2">
       <div class="card">
         <h2>カメラでバーコードを読み取る</h2>
-        <video id="camera" autoplay muted playsinline></video>
+        <div class="video-wrap">
+          <video id="camera" autoplay muted playsinline></video>
+          <div class="scan-guide"></div>
+        </div>
         <div class="controls-row">
           <select id="cameraSelect"></select>
           <button id="startBtn" class="primary">カメラ開始</button>
           <button id="stopBtn" disabled>停止</button>
+          <button id="torchBtn" style="display:none;">💡 ライトON</button>
         </div>
         <div id="scanStatus" class="status-line">カメラ未起動です。「カメラ開始」を押してください。</div>
         <p style="color:var(--muted); font-size:12px; margin-top:6px;">
           カメラを止めずに、バーコードを次々読み取れます。読み取るたびに下の「スキャン中の一覧」に
-          追加されます。読み取り終わったら「レシートを作成」でまとめて1枚のレシートにできます。
+          追加されます。読み取り終わったら「レシートを作成」でまとめて1枚のレシートにできます。<br>
+          <strong>読み取りやすくするコツ：</strong>バーコードを枠の中に、なるべく大きく・まっすぐ・
+          ピントが合う距離（10〜20cm程度）で映してください。暗い場所では上の「💡 ライト」も
+          お使いください。
         </p>
+
+        <div class="field-row" style="margin-top:10px;">
+          <label>うまく読み取れない場合は、値を直接入力して追加</label>
+          <div class="controls-row" style="margin-top:0;">
+            <input type="text" id="manualBarcodeInput" placeholder="バーコードの値を入力してEnterまたは「追加」" style="flex:1 1 200px;" />
+            <button id="manualAddBtn">追加</button>
+          </div>
+        </div>
 
         <div class="field-row" style="margin-top:14px;">
           <label>レシート見出し（店舗名・タイトルなど）</label>

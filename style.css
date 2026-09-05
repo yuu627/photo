@@ -108,12 +108,33 @@ main {
   margin: 0 0 12px;
 }
 
+.video-wrap {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
 video#camera {
   width: 100%;
+  display: block;
   border-radius: 10px;
   background: #111;
   aspect-ratio: 4 / 3;
   object-fit: cover;
+}
+
+/* バーコードを合わせる位置の目安枠。実際のデコード範囲は映像全体だが、
+   ここに大きくまっすぐ映すよう促すことで読み取り成功率が上がる。 */
+.scan-guide {
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  top: 36%;
+  bottom: 36%;
+  border: 2px dashed rgba(255, 255, 255, 0.9);
+  border-radius: 8px;
+  box-shadow: 0 0 0 2000px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
 }
 
 .controls-row {

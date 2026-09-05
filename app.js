@@ -366,7 +366,9 @@
       F.CODE_128, F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_39, F.CODABAR, F.ITF,
     ]);
     hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-    return new ZXing.BrowserMultiFormatReader(hints);
+    // 第2引数は読み取り試行の間隔(ms)。既定値の500msだと反応が遅く、フレームを
+    // 取りこぼして読み取り失敗につながりやすいため、短めにして読み取り精度(成功率)を上げる。
+    return new ZXing.BrowserMultiFormatReader(hints, 120);
   }
 
   let userPickedCamera = false; // ユーザーがカメラ選択欄を自分で操作したか
@@ -393,6 +395,53 @@
     }
   }
 
+  const torchBtn = document.getElementById("torchBtn");
+  let currentTrack = null; // 起動中カメラのvideo track（ライト制御・ケイパビリティ確認用）
+  let torchOn = false;
+
+  // ピント・露出・ホワイトバランスを継続的に自動調整させる（advancedなので非対応環境でも無視されるだけで安全）。
+  // 近距離のバーコードにピントが合わないことが読み取り失敗の主な原因の一つのため。
+  const ADVANCED_FOCUS_CONSTRAINTS = [
+    { focusMode: "continuous" },
+    { exposureMode: "continuous" },
+    { whiteBalanceMode: "continuous" },
+  ];
+
+  async function setupTrackCapabilities() {
+    try {
+      const stream = videoEl.srcObject;
+      currentTrack = stream ? stream.getVideoTracks()[0] : null;
+      if (currentTrack && typeof currentTrack.getCapabilities === "function") {
+        const caps = currentTrack.getCapabilities();
+        if (caps && caps.torch) {
+          torchBtn.style.display = "inline-block";
+        } else {
+          torchBtn.style.display = "none";
+        }
+      } else {
+        torchBtn.style.display = "none";
+      }
+      // ピント等をここでも明示的に試みる（decodeFromConstraints側で反映されない環境向けの保険）
+      if (currentTrack && typeof currentTrack.applyConstraints === "function") {
+        try { await currentTrack.applyConstraints({ advanced: ADVANCED_FOCUS_CONSTRAINTS }); } catch (e) {}
+      }
+    } catch (e) {
+      torchBtn.style.display = "none";
+    }
+  }
+
+  torchBtn.addEventListener("click", async () => {
+    if (!currentTrack) return;
+    const next = !torchOn;
+    try {
+      await currentTrack.applyConstraints({ advanced: [{ torch: next }] });
+      torchOn = next;
+      torchBtn.textContent = torchOn ? "💡 ライトOFF" : "💡 ライトON";
+    } catch (e) {
+      alert("このカメラはライトの制御に対応していないようです。");
+    }
+  });
+
   async function startScanning() {
     startBtn.disabled = true;
     setStatus("カメラを起動しています…");
@@ -416,11 +465,20 @@
       const deviceId = userPickedCamera ? (cameraSelect.value || null) : null;
 
       // 解像度を明示的に高めに指定すると、バーコードの読み取り精度が上がりやすい。
+      // advancedのフォーカス/露出/ホワイトバランス指定は対応していない環境では無視されるだけなので安全。
       // 対応していない環境向けに、失敗時は従来の指定なし方式にフォールバックする。
+      const baseVideoConstraints = {
+        width: { ideal: 1920, min: 1280 },
+        height: { ideal: 1080, min: 720 },
+        frameRate: { ideal: 30 },
+        advanced: ADVANCED_FOCUS_CONSTRAINTS,
+      };
       const constraints = {
-        video: deviceId
-          ? { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
-          : { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+        video: Object.assign(
+          {},
+          baseVideoConstraints,
+          deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: "environment" } }
+        ),
       };
       const fallbackDeviceId = deviceId || cameraSelect.value || (devices[0] && devices[0].deviceId);
       try {
@@ -433,7 +491,9 @@
         await codeReader.decodeFromVideoDevice(fallbackDeviceId || undefined, videoEl, onDecode);
       }
 
-      setStatus("読み取り中です。バーコードをカメラに向けてください。", "ok");
+      await setupTrackCapabilities();
+
+      setStatus("読み取り中です。バーコードを枠の中に大きく映してください。", "ok");
       stopBtn.disabled = false;
     } catch (e) {
       setStatus("カメラを起動できませんでした: " + e.message + "（ブラウザのカメラ許可設定をご確認ください）", "err");
@@ -448,6 +508,10 @@
     scanning = false;
     startBtn.disabled = false;
     stopBtn.disabled = true;
+    currentTrack = null;
+    torchOn = false;
+    torchBtn.style.display = "none";
+    torchBtn.textContent = "💡 ライトON";
     setStatus("カメラを停止しました。");
   }
 
@@ -517,6 +581,22 @@
     if (cart.length === 0) return;
     previewReceiptNo = getCounter() + 1;
     renderReceiptPreview(cart);
+  });
+
+  /* ---------- 手入力での追加（カメラでどうしても読み取れない場合の保険） ---------- */
+  const manualBarcodeInput = document.getElementById("manualBarcodeInput");
+  const manualAddBtn = document.getElementById("manualAddBtn");
+
+  function submitManualBarcode() {
+    const val = manualBarcodeInput.value.trim();
+    if (!val) return;
+    handleDecoded(val);
+    manualBarcodeInput.value = "";
+    manualBarcodeInput.focus();
+  }
+  manualAddBtn.addEventListener("click", submitManualBarcode);
+  manualBarcodeInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); submitManualBarcode(); }
   });
 
   function handleDecoded(text) {
