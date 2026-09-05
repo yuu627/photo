@@ -24,7 +24,7 @@
   let codeReader = null;
   let scanning = false;
   let paused = false;
-  let currentMatch = null; // 直近マッチしたエントリ { barcode, photos: [...], label }
+  let lastReceiptItems = null; // 直近プレビュー表示したレシートの元データ（複数バーコード分）[{barcode, photos:[...], label}, ...]
   let previewReceiptNo = null;
 
   const HISTORY_KEY = "receipt_photo_system_history_v1";
@@ -369,6 +369,9 @@
     return new ZXing.BrowserMultiFormatReader(hints);
   }
 
+  let userPickedCamera = false; // ユーザーがカメラ選択欄を自分で操作したか
+  cameraSelect.addEventListener("change", () => { userPickedCamera = true; });
+
   async function populateCameraList() {
     try {
       const devices = await ZXing.BrowserCodeReader.listVideoInputDevices();
@@ -379,6 +382,10 @@
         opt.textContent = d.label || `カメラ ${i + 1}`;
         cameraSelect.appendChild(opt);
       });
+      // スマホ等で背面（リア）カメラらしきものが見つかれば、表示上はそれを選択済みにしておく
+      // （ラベルにback/rear/environment/背面などを含むものを背面カメラとみなす簡易判定）
+      const backIndex = devices.findIndex((d) => /back|rear|environment|背面/i.test(d.label || ""));
+      if (backIndex >= 0) cameraSelect.selectedIndex = backIndex;
       return devices;
     } catch (e) {
       setStatus("カメラ一覧の取得に失敗しました: " + e.message, "err");
@@ -392,7 +399,6 @@
     try {
       codeReader = buildCodeReader();
       const devices = await populateCameraList();
-      const deviceId = cameraSelect.value || (devices[0] && devices[0].deviceId);
       scanning = true;
       paused = false;
 
@@ -403,24 +409,28 @@
         // NotFoundExceptionは「今のフレームでは見つからなかった」だけなので無視してよい
       };
 
+      // ユーザーがカメラ選択欄を自分で操作していない場合は、特定のdeviceIdに固定せず
+      // facingMode: environment（背面カメラ優先）に任せる。スマホは複数カメラを持つことが多く、
+      // 検出順の先頭が必ずしも背面カメラとは限らないため、deviceIdで固定すると
+      // 意図せずインカメラ（自撮り用）が選ばれてバーコードが読み取りにくくなることがあった。
+      const deviceId = userPickedCamera ? (cameraSelect.value || null) : null;
+
       // 解像度を明示的に高めに指定すると、バーコードの読み取り精度が上がりやすい。
       // 対応していない環境向けに、失敗時は従来の指定なし方式にフォールバックする。
       const constraints = {
-        video: {
-          deviceId: deviceId ? { exact: deviceId } : undefined,
-          facingMode: deviceId ? undefined : { ideal: "environment" },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-        },
+        video: deviceId
+          ? { deviceId: { exact: deviceId }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+          : { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
       };
+      const fallbackDeviceId = deviceId || cameraSelect.value || (devices[0] && devices[0].deviceId);
       try {
         if (typeof codeReader.decodeFromConstraints === "function") {
           await codeReader.decodeFromConstraints(constraints, videoEl, onDecode);
         } else {
-          await codeReader.decodeFromVideoDevice(deviceId || undefined, videoEl, onDecode);
+          await codeReader.decodeFromVideoDevice(fallbackDeviceId || undefined, videoEl, onDecode);
         }
       } catch (e2) {
-        await codeReader.decodeFromVideoDevice(deviceId || undefined, videoEl, onDecode);
+        await codeReader.decodeFromVideoDevice(fallbackDeviceId || undefined, videoEl, onDecode);
       }
 
       setStatus("読み取り中です。バーコードをカメラに向けてください。", "ok");
@@ -450,24 +460,84 @@
   let lastDecodedText = null;
   let cooldownTimer = null;
 
+  /* ---------- スキャン中の一覧（カート） ----------
+   * バーコードを読み取るたびにここへ1件ずつ追加していく。カメラは止めず、
+   * 複数のバーコードを続けて読み取れる。「レシートを作成」で、たまった
+   * 一覧をまとめて1枚のレシートにする。
+   */
+  let cart = []; // { barcode, label, photos: [...] }
+
+  const cartTableBody = document.querySelector("#cartTable tbody");
+  const cartListWrap = document.getElementById("cartListWrap");
+  const cartEmptyHint = document.getElementById("cartEmptyHint");
+  const cartCountEl = document.getElementById("cartCount");
+  const makeReceiptBtn = document.getElementById("makeReceiptBtn");
+  const clearCartBtn = document.getElementById("clearCartBtn");
+
+  function renderCart() {
+    cartCountEl.textContent = String(cart.length);
+    makeReceiptBtn.disabled = cart.length === 0;
+    clearCartBtn.disabled = cart.length === 0;
+    if (cart.length === 0) {
+      cartListWrap.style.display = "none";
+      cartEmptyHint.style.display = "block";
+      return;
+    }
+    cartEmptyHint.style.display = "none";
+    cartListWrap.style.display = "block";
+    cartTableBody.innerHTML = "";
+    cart.forEach((item, idx) => {
+      const tr = document.createElement("tr");
+      const thumb = item.photos[0] || "";
+      const badge = item.photos.length > 1 ? `<span class="tag" style="margin-left:4px;">+${item.photos.length - 1}</span>` : "";
+      tr.innerHTML = `
+        <td><div class="thumb-row" style="align-items:center;"><img class="thumb" src="${thumb}" alt="">${badge}</div></td>
+        <td>${escapeHtml(item.barcode)}</td>
+        <td>${escapeHtml(item.label || "")}</td>
+        <td><button class="entry-del" data-idx="${idx}">削除</button></td>
+      `;
+      cartTableBody.appendChild(tr);
+    });
+    cartTableBody.querySelectorAll(".entry-del").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        cart.splice(parseInt(btn.dataset.idx, 10), 1);
+        renderCart();
+      });
+    });
+  }
+
+  clearCartBtn.addEventListener("click", () => {
+    if (cart.length === 0) return;
+    if (!confirm("スキャン中の一覧をクリアしますか？")) return;
+    cart = [];
+    renderCart();
+  });
+
+  makeReceiptBtn.addEventListener("click", () => {
+    if (cart.length === 0) return;
+    previewReceiptNo = getCounter() + 1;
+    renderReceiptPreview(cart);
+  });
+
   function handleDecoded(text) {
-    if (text === lastDecodedText) return; // 直前と同じ検出は連続無視（confirm/retryでリセットされる）
+    if (text === lastDecodedText) return; // 直前と同じ検出は連続無視（クールダウン後にリセットされる）
     lastDecodedText = text;
     paused = true;
+    clearTimeout(cooldownTimer);
 
     const match = findMapping(text);
     if (!match) {
       setStatus(`未登録のバーコードです（値: "${text}"）。②の対応表タブで登録してください。`, "warn");
       // 3秒後に自動で再開して読み取りを続ける
-      clearTimeout(cooldownTimer);
       cooldownTimer = setTimeout(() => { paused = false; lastDecodedText = null; setStatus("読み取り中です。バーコードをカメラに向けてください。", "ok"); }, 3000);
       return;
     }
 
-    currentMatch = { barcode: text, photos: match.photos, label: match.label || "" };
-    setStatus(`バーコード "${text}" を読み取りました（写真${match.photos.length}枚）。プレビューを確認してください。`, "ok");
-    previewReceiptNo = getCounter() + 1;
-    renderReceiptPreview(currentMatch);
+    cart.push({ barcode: text, label: match.label || "", photos: match.photos });
+    renderCart();
+    setStatus(`バーコード "${text}" を追加しました（現在${cart.length}件）。続けて読み取れます。`, "ok");
+    // 短いクールダウンの後、自動で読み取りを再開する（同じバーコードを連続で二重追加しにくくする）
+    cooldownTimer = setTimeout(() => { paused = false; lastDecodedText = null; }, 1200);
   }
 
   /* ---------- レシート画像の生成（感熱レシート風デザイン） ---------- */
@@ -582,7 +652,15 @@
     return "No. " + String(n).padStart(6, "0");
   }
 
-  async function renderReceiptPreview(match) {
+  /*
+   * items: [{ barcode, label, photos: [...] }, ...]
+   * 「スキャン中の一覧」にたまった複数のバーコード分をまとめて1枚のレシートに描画する。
+   * 1件しか無い場合も同じロジックで問題なく描画できる。
+   */
+  async function renderReceiptPreview(items) {
+    if (!items || items.length === 0) return;
+    lastReceiptItems = items;
+
     const paperWidth = parseInt(document.getElementById("paperWidth").value, 10);
     const printMode = document.getElementById("printMode").value;
     const title = document.getElementById("receiptTitle").value || "PHOTO RECEIPT";
@@ -591,19 +669,13 @@
     const pad = Math.round(paperWidth * 0.07);
     const innerW = paperWidth - pad * 2;
 
-    let photoImgs;
+    let itemImgs;
     try {
-      photoImgs = await Promise.all(match.photos.map((src) => loadImage(src)));
+      itemImgs = await Promise.all(items.map((it) => Promise.all((it.photos || []).map((src) => loadImage(src)))));
     } catch (e) {
       setStatus("写真の読み込みに失敗しました。", "err");
       return;
     }
-    if (photoImgs.length === 0) {
-      setStatus("この対応表エントリには写真が登録されていません。", "warn");
-      return;
-    }
-
-    const barcodeCanvas = makeBarcodeCanvas(match.barcode);
 
     const titleFont = Math.round(paperWidth * 0.058);
     const subFont = Math.round(paperWidth * 0.03);
@@ -612,31 +684,46 @@
     const captionFont = Math.round(paperWidth * 0.026);
     const lineGap = Math.round(paperWidth * 0.022);
 
-    // 写真ごとのサイズを事前計算
-    const maxPhotoH = (photoImgs.length > 1 ? 0.85 : 1.15) * paperWidth;
-    const photoSizes = photoImgs.map((img) => {
-      let w = innerW, h = (img.height / img.width) * w;
-      if (h > maxPhotoH) { h = maxPhotoH; w = (img.width / img.height) * h; }
-      return { w, h };
-    });
+    const totalPhotoCount = items.reduce((s, it) => s + (it.photos ? it.photos.length : 0), 0);
+    const maxPhotoH = (totalPhotoCount > 1 ? 0.75 : 1.15) * paperWidth;
+    const multiItem = items.length > 1;
+    const barcodeH = multiItem ? 30 : 42;
+
+    // アイテムごとの写真サイズを事前計算
+    const itemPhotoSizes = itemImgs.map((imgs) =>
+      imgs.map((img) => {
+        let w = innerW, h = (img.height / img.width) * w;
+        if (h > maxPhotoH) { h = maxPhotoH; w = (img.width / img.height) * h; }
+        return { w, h };
+      })
+    );
+
+    // アイテムごとのバーコード画像
+    const itemBarcodeCanvases = items.map((it) => makeBarcodeCanvas(it.barcode));
 
     // ---- 高さを積算してキャンバスサイズを決定 ----
     let y = zz.depth + pad;
-    y += titleFont + 4;                       // タイトル
-    y += subFont + lineGap;                   // サブタイトル
-    y += smallFont + lineGap;                 // 伝票番号・日時
-    y += 4;                                   // 区切り線
-    y += 8;
-    photoSizes.forEach((s, i) => {
-      y += s.h;
-      y += captionFont + 4;                   // キャプション（枚数表示）
-      if (i !== photoSizes.length - 1) y += lineGap;
+    y += titleFont + 4;                        // タイトル
+    y += subFont + lineGap;                    // サブタイトル
+    y += smallFont + lineGap;                  // 伝票番号・日時
+    if (multiItem) y += smallFont + 4;         // 点数
+    y += 4 + 8;                                // 区切り線＋余白
+
+    items.forEach((it, ii) => {
+      if (it.label) y += textFont + 6;
+      itemPhotoSizes[ii].forEach((s, pi) => {
+        y += s.h;
+        y += captionFont + 4;
+        if (pi !== itemPhotoSizes[ii].length - 1) y += lineGap;
+      });
+      y += smallFont + 4;                                  // バーコード値テキスト
+      if (itemBarcodeCanvases[ii]) y += 4 + barcodeH + lineGap; // バーコード画像
+      if (ii !== items.length - 1) y += lineGap + 4;        // アイテム間の区切り線
     });
+
     y += lineGap + 6;
-    if (match.label) y += textFont + 8;       // 商品ラベル
-    y += smallFont + 4;                       // バーコード値
-    if (barcodeCanvas) y += 42 + lineGap;      // バーコード画像
-    y += 4;                                   // 区切り線
+    y += 4;                                    // 最終区切り線
+    y += 6;                                     // 余裕分
     y += pad + zz.depth;
 
     const canvasH = Math.round(y);
@@ -671,60 +758,70 @@
     cy += smallFont + lineGap;
     ctx.fillText(`${formatReceiptNo(previewReceiptNo)}   ${formatDate(now)}`, paperWidth / 2, cy);
 
+    // 点数（複数バーコードをまとめた場合のみ表示）
+    if (multiItem) {
+      ctx.fillStyle = "#555";
+      cy += smallFont + 4;
+      ctx.fillText(`点数: ${items.length}点`, paperWidth / 2, cy);
+    }
+
     cy += 4;
     drawDashedLine(ctx, pad, paperWidth - pad, cy, [2, 3]);
     cy += 8;
 
-    // 写真（複数枚は縦に並べる）
-    ctx.fillStyle = "#1a1a1a";
-    photoSizes.forEach((s, i) => {
-      const px = (paperWidth - s.w) / 2;
-      ctx.save();
-      ctx.strokeStyle = "#ddd";
-      ctx.lineWidth = 1;
-      ctx.strokeRect(px - 1, cy - 1, s.w + 2, s.h + 2);
-      ctx.drawImage(photoImgs[i], px, cy, s.w, s.h);
-      ctx.restore();
-      cy += s.h;
-      ctx.font = `${captionFont}px "Courier New", monospace`;
-      ctx.fillStyle = "#777";
-      cy += captionFont + 4;
-      const cap = photoSizes.length > 1 ? `PHOTO ${i + 1}/${photoSizes.length}` : "PHOTO";
-      ctx.fillText(cap, paperWidth / 2, cy - 2);
+    // アイテムごとに描画
+    items.forEach((it, ii) => {
       ctx.fillStyle = "#1a1a1a";
-      if (i !== photoSizes.length - 1) cy += lineGap;
+
+      if (it.label) {
+        ctx.font = `bold ${textFont}px "Courier New", monospace`;
+        ctx.fillStyle = "#111";
+        cy += textFont + 6;
+        ctx.fillText(it.label, paperWidth / 2, cy);
+      }
+
+      const imgs = itemImgs[ii];
+      itemPhotoSizes[ii].forEach((s, pi) => {
+        const px = (paperWidth - s.w) / 2;
+        ctx.save();
+        ctx.strokeStyle = "#ddd";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(px - 1, cy - 1, s.w + 2, s.h + 2);
+        ctx.drawImage(imgs[pi], px, cy, s.w, s.h);
+        ctx.restore();
+        cy += s.h;
+        ctx.font = `${captionFont}px "Courier New", monospace`;
+        ctx.fillStyle = "#777";
+        cy += captionFont + 4;
+        const cap = itemPhotoSizes[ii].length > 1 ? `PHOTO ${pi + 1}/${itemPhotoSizes[ii].length}` : "PHOTO";
+        ctx.fillText(cap, paperWidth / 2, cy - 2);
+        ctx.fillStyle = "#1a1a1a";
+        if (pi !== itemPhotoSizes[ii].length - 1) cy += lineGap;
+      });
+
+      // バーコード値（*で挟んで印字っぽく）
+      ctx.font = `${smallFont}px "Courier New", monospace`;
+      ctx.fillStyle = "#333";
+      cy += smallFont + 4;
+      ctx.fillText(`*${it.barcode}*`, paperWidth / 2, cy);
+
+      const bc = itemBarcodeCanvases[ii];
+      if (bc) {
+        const bw = Math.min(innerW, bc.width);
+        const bx = (paperWidth - bw) / 2;
+        cy += 4;
+        ctx.drawImage(bc, bx, cy, bw, barcodeH);
+        cy += barcodeH + lineGap;
+      }
+
+      if (ii !== items.length - 1) {
+        cy += 4;
+        drawDashedLine(ctx, pad, paperWidth - pad, cy, [1, 4]);
+        cy += lineGap;
+      }
     });
 
     cy += lineGap + 2;
-    drawDashedLine(ctx, pad, paperWidth - pad, cy, [2, 3]);
-    cy += 6;
-
-    // 商品ラベル
-    if (match.label) {
-      ctx.font = `bold ${textFont}px "Courier New", monospace`;
-      ctx.fillStyle = "#111";
-      cy += textFont + 4;
-      ctx.fillText(match.label, paperWidth / 2, cy);
-      cy += 4;
-    }
-
-    // バーコード値（*で挟んで印字っぽく）
-    ctx.font = `${smallFont}px "Courier New", monospace`;
-    ctx.fillStyle = "#333";
-    cy += smallFont + 4;
-    ctx.fillText(`*${match.barcode}*`, paperWidth / 2, cy);
-    cy += 4;
-
-    // バーコード画像（再生成）
-    if (barcodeCanvas) {
-      const bw = Math.min(innerW, barcodeCanvas.width);
-      const bh = 42;
-      const bx = (paperWidth - bw) / 2;
-      ctx.drawImage(barcodeCanvas, bx, cy, bw, bh);
-      cy += bh + lineGap;
-    }
-
-    cy += 2;
     drawDashedLine(ctx, pad, paperWidth - pad, cy, [2, 3]);
 
     // 印字モード（グレースケール／白黒2値）適用
@@ -740,37 +837,43 @@
 
   ["paperWidth", "printMode", "receiptTitle"].forEach((id) => {
     document.getElementById(id).addEventListener("change", () => {
-      if (currentMatch) renderReceiptPreview(currentMatch);
+      if (lastReceiptItems) renderReceiptPreview(lastReceiptItems);
     });
   });
 
   /* ---------- 確定 / やり直し / ダウンロード ---------- */
   document.getElementById("confirmBtn").addEventListener("click", () => {
-    if (!currentMatch) return;
+    if (!lastReceiptItems) return;
     const no = bumpCounter();
+    const flatPhotos = [];
+    lastReceiptItems.forEach((it) => flatPhotos.push(...it.photos));
     history.unshift({
       no,
       time: formatDate(new Date()),
-      barcode: currentMatch.barcode,
-      label: currentMatch.label,
-      photos: currentMatch.photos,
+      items: lastReceiptItems,
+      photos: flatPhotos,
     });
     history = history.slice(0, 100);
     saveHistory();
     renderHistory();
-    setStatus("履歴に記録しました。次のバーコードを読み取れます。", "ok");
+    setStatus("履歴に記録しました。続けてバーコードを読み取れます。", "ok");
+    cart = [];
+    renderCart();
     resetForNextScan();
   });
 
   document.getElementById("retryBtn").addEventListener("click", () => {
-    setStatus("読み取り中です。バーコードをカメラに向けてください。", "ok");
+    setStatus("一覧に戻りました。読み取りを続けるか、内容を調整してください。", "ok");
     resetForNextScan();
   });
 
   document.getElementById("downloadBtn").addEventListener("click", () => {
-    if (!currentMatch) return;
+    if (!lastReceiptItems) return;
+    const name = lastReceiptItems.length > 1
+      ? `receipt_${lastReceiptItems[0].barcode}_and_${lastReceiptItems.length - 1}more`
+      : `receipt_${lastReceiptItems[0].barcode}`;
     const link = document.createElement("a");
-    link.download = `receipt_${currentMatch.barcode}.png`;
+    link.download = `${name}.png`;
     link.href = receiptCanvas.toDataURL("image/png");
     link.click();
   });
@@ -778,7 +881,7 @@
   // iPhoneのSafariなどdownload属性が効かない環境向けの保存手段。
   // 新しいタブに画像だけを表示するので、長押しして「写真に追加/画像を保存」で保存できる。
   document.getElementById("openInTabBtn").addEventListener("click", () => {
-    if (!currentMatch) return;
+    if (!lastReceiptItems) return;
     const dataUrl = receiptCanvas.toDataURL("image/png");
     const w = window.open("", "_blank");
     if (!w) {
@@ -792,10 +895,8 @@
   function resetForNextScan() {
     receiptWrap.style.display = "none";
     receiptEmptyHint.style.display = "block";
-    currentMatch = null;
+    lastReceiptItems = null;
     previewReceiptNo = null;
-    lastDecodedText = null;
-    paused = false;
   }
 
   /* ---------- 履歴描画 ---------- */
@@ -807,14 +908,19 @@
     emptyEl.style.display = "none";
     history.forEach((h) => {
       const tr = document.createElement("tr");
+      const items = h.items || (h.barcode ? [{ barcode: h.barcode, label: h.label, photos: h.photos || (h.photoUrl ? [h.photoUrl] : []) }] : []);
       const photos = h.photos || (h.photoUrl ? [h.photoUrl] : []);
       const badge = photos.length > 1 ? `<span class="tag" style="margin-left:4px;">+${photos.length - 1}</span>` : "";
+      const barcodeText = items.length > 1 ? `${items.length}件（${items.map((it) => it.barcode).join(", ")}）` : (items[0] ? items[0].barcode : "");
+      const labelText = items.length > 1
+        ? items.map((it) => it.label || it.barcode).join(" / ")
+        : (items[0] ? (items[0].label || "") : "");
       tr.innerHTML = `
         <td><div class="thumb-row" style="align-items:center;"><img class="thumb" src="${photos[0] || ""}" alt="">${badge}</div></td>
         <td>${h.no ? formatReceiptNo(h.no) : ""}</td>
         <td>${escapeHtml(h.time)}</td>
-        <td>${escapeHtml(h.barcode)}</td>
-        <td>${escapeHtml(h.label || "")}</td>
+        <td>${escapeHtml(barcodeText)}</td>
+        <td>${escapeHtml(labelText)}</td>
       `;
       tbody.appendChild(tr);
     });

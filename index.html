@@ -33,6 +33,10 @@
           <button id="stopBtn" disabled>停止</button>
         </div>
         <div id="scanStatus" class="status-line">カメラ未起動です。「カメラ開始」を押してください。</div>
+        <p style="color:var(--muted); font-size:12px; margin-top:6px;">
+          カメラを止めずに、バーコードを次々読み取れます。読み取るたびに下の「スキャン中の一覧」に
+          追加されます。読み取り終わったら「レシートを作成」でまとめて1枚のレシートにできます。
+        </p>
 
         <div class="field-row" style="margin-top:14px;">
           <label>レシート見出し（店舗名・タイトルなど）</label>
@@ -58,18 +62,37 @@
       </div>
 
       <div class="card">
-        <h2>レシート プレビュー</h2>
-        <div id="receiptEmptyHint" class="empty-hint">
-          バーコードを読み取ると、ここにレシート印字イメージのプレビューが表示されます。
+        <h2>スキャン中の一覧（<span id="cartCount">0</span>件）</h2>
+        <div id="cartEmptyHint" class="empty-hint">
+          バーコードを読み取ると、ここに1件ずつ追加されていきます。
         </div>
-        <div id="receiptWrap" class="receipt-wrap" style="display:none;">
-          <canvas id="receiptCanvas"></canvas>
-          <div class="receipt-actions">
-            <button id="confirmBtn" class="primary">これでOK（履歴に記録）</button>
-            <button id="retryBtn">やり直す</button>
-            <button id="downloadBtn">PNGをダウンロード</button>
-            <button id="openInTabBtn" class="ghost">新しいタブで開く（iPhoneは長押しで保存）</button>
-          </div>
+        <div id="cartListWrap" class="table-scroll" style="display:none;">
+          <table class="history" id="cartTable">
+            <thead>
+              <tr><th>写真</th><th>バーコード</th><th>ラベル</th><th></th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="controls-row">
+          <button id="makeReceiptBtn" class="primary" disabled>レシートを作成</button>
+          <button id="clearCartBtn" class="ghost" disabled>一覧をクリア</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:20px;">
+      <h2>レシート プレビュー</h2>
+      <div id="receiptEmptyHint" class="empty-hint">
+        「レシートを作成」を押すと、ここにレシート印字イメージのプレビューが表示されます。
+      </div>
+      <div id="receiptWrap" class="receipt-wrap" style="display:none;">
+        <canvas id="receiptCanvas"></canvas>
+        <div class="receipt-actions">
+          <button id="confirmBtn" class="primary">これでOK（履歴に記録）</button>
+          <button id="retryBtn">やり直す（一覧に戻る）</button>
+          <button id="downloadBtn">PNGをダウンロード</button>
+          <button id="openInTabBtn" class="ghost">新しいタブで開く（iPhoneは長押しで保存）</button>
         </div>
       </div>
     </div>
