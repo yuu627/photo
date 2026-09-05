@@ -195,12 +195,11 @@
         まだバーコードリーダーや実物のバーコードが無い場合、ここで作成したバーコードをスマホ画面や別モニターに表示し、①のタブでカメラから読み取ってテストできます。印刷も可能です。
       </p>
       <p style="color:var(--accent-dark); font-size:13px; background:#eef4ff; padding:8px 10px; border-radius:8px;">
-        💡 <strong>スマホのカメラで読み取りにくい場合は「QRコード」がおすすめです。</strong>
-        QRコードはもともとカメラで読み取ることを前提に設計されており、多少ボケていたり
-        画面のモアレで一部が欠けていても正しく読み取れる仕組み（誤り訂正）を持っているため、
-        1次元バーコードよりもカメラでの読み取りに強いです。バーコードの値自体を紐付けに
-        使っているだけなので、QRコードに変えても対応表（mapping.js・一時登録）の仕組みは
-        そのまま使えます。
+        💡 <strong>①タブでは、対応しているブラウザ（主にAndroidのChrome/Edge、および比較的新しい
+        デスクトップ版Chrome/Edge）で、ブラウザ内蔵の高速バーコード検出機能を自動的に使うように
+        なりました。</strong>対応環境では、より少ない処理で・より高い精度でバーコードを検出できます
+        （非対応のブラウザ、特にiPhoneのSafariでは、これまで通りのJavaScriptライブラリでの
+        読み取りに自動的に切り替わります）。
       </p>
       <div class="two-col">
         <div class="field-row">
@@ -210,20 +209,19 @@
         <div class="field-row">
           <label>形式</label>
           <select id="genFormat">
-            <option value="QRCODE">QRコード（推奨・カメラでの読み取りに強い）</option>
-            <option value="CODE128">CODE128（1次元・任意の文字列）</option>
-            <option value="EAN13">EAN-13（1次元・数字12〜13桁）</option>
-            <option value="UPC">UPC-A（1次元・数字11〜12桁）</option>
-            <option value="CODE39">CODE39（1次元）</option>
+            <option value="CODE128">CODE128（任意の文字列・推奨）</option>
+            <option value="EAN13">EAN-13（数字12〜13桁）</option>
+            <option value="UPC">UPC-A（数字11〜12桁）</option>
+            <option value="CODE39">CODE39</option>
+            <option value="QRCODE">QRコード（参考。生成には別途外部ライブラリの読み込みが必要です）</option>
           </select>
         </div>
       </div>
       <div class="controls-row">
         <button id="genBtn" class="primary">バーコードを作成</button>
-        <button id="genSample1" class="ghost">サンプル1（QR）</button>
-        <button id="genSample2" class="ghost">サンプル2（QR）</button>
-        <button id="genSample3" class="ghost">サンプル3（QR）</button>
-        <button id="genSample1Linear" class="ghost">サンプル1（1次元）</button>
+        <button id="genSample1" class="ghost">サンプル1</button>
+        <button id="genSample2" class="ghost">サンプル2</button>
+        <button id="genSample3" class="ghost">サンプル3</button>
       </div>
       <div id="genStatus" class="status-line" style="display:none;"></div>
       <div style="margin-top:16px; text-align:center;">

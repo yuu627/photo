@@ -449,20 +449,81 @@
     }
   });
 
+  /*
+   * ブラウザ内蔵の高速バーコード検出API（Shape Detection API / BarcodeDetector）。
+   * 対応しているブラウザ（主にAndroidのChrome/Edge、比較的新しいデスクトップ版Chrome/Edge）では、
+   * OS・ブラウザ側の最適化されたエンジン（Androidの場合Google製の高精度な検出エンジン相当）を
+   * 直接呼び出せるため、JavaScriptだけで実装されたZXingライブラリより高速・高精度に検出できることが多い。
+   * 非対応のブラウザ（iPhoneのSafariなど）では自動的にZXingへフォールバックする。
+   */
+  let usingNativeDetector = false;
+  let nativeDetector = null;
+  let nativeStream = null;
+  let nativeLoopActive = false;
+  let nativeLoopTimer = null;
+
+  const NATIVE_DESIRED_FORMATS = ["code_128", "ean_13", "ean_8", "upc_a", "upc_e", "code_39", "qr_code"];
+
+  async function tryStartNativeScanning(constraints, onDecode) {
+    if (typeof window.BarcodeDetector === "undefined") return false;
+    try {
+      const supported = await window.BarcodeDetector.getSupportedFormats();
+      const formats = NATIVE_DESIRED_FORMATS.filter((f) => supported.includes(f));
+      if (formats.length === 0) return false;
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      videoEl.srcObject = stream;
+      try { await videoEl.play(); } catch (e) {}
+      nativeStream = stream;
+      nativeDetector = new window.BarcodeDetector({ formats });
+      usingNativeDetector = true;
+      nativeLoopActive = true;
+
+      const tick = async () => {
+        if (!nativeLoopActive) return;
+        if (!paused && videoEl.readyState >= 2) {
+          try {
+            const results = await nativeDetector.detect(videoEl);
+            if (results && results.length) onDecode(results[0].rawValue);
+          } catch (e) {
+            // 1フレームの検出失敗は無視して次のフレームで再試行する
+          }
+        }
+        if (nativeLoopActive) nativeLoopTimer = setTimeout(tick, 120);
+      };
+      tick();
+      return true;
+    } catch (e) {
+      // getUserMedia失敗・非対応など。ZXing側へフォールバックする。
+      if (nativeStream) {
+        try { nativeStream.getTracks().forEach((t) => t.stop()); } catch (e2) {}
+        nativeStream = null;
+      }
+      return false;
+    }
+  }
+
+  function stopNativeScanning() {
+    nativeLoopActive = false;
+    if (nativeLoopTimer) { clearTimeout(nativeLoopTimer); nativeLoopTimer = null; }
+    if (nativeStream) {
+      try { nativeStream.getTracks().forEach((t) => t.stop()); } catch (e) {}
+      nativeStream = null;
+    }
+    nativeDetector = null;
+    usingNativeDetector = false;
+  }
+
   async function startScanning() {
     startBtn.disabled = true;
     setStatus("カメラを起動しています…");
     try {
-      codeReader = buildCodeReader();
       const devices = await populateCameraList();
       scanning = true;
       paused = false;
 
-      const onDecode = (result, err) => {
-        if (result && !paused) {
-          handleDecoded(result.getText());
-        }
-        // NotFoundExceptionは「今のフレームでは見つからなかった」だけなので無視してよい
+      const onDecode = (text) => {
+        if (!paused) handleDecoded(text);
       };
 
       // ユーザーがカメラ選択欄を自分で操作していない場合は、特定のdeviceIdに固定せず
@@ -488,19 +549,34 @@
         ),
       };
       const fallbackDeviceId = deviceId || cameraSelect.value || (devices[0] && devices[0].deviceId);
-      try {
-        if (typeof codeReader.decodeFromConstraints === "function") {
-          await codeReader.decodeFromConstraints(constraints, videoEl, onDecode);
-        } else {
-          await codeReader.decodeFromVideoDevice(fallbackDeviceId || undefined, videoEl, onDecode);
+
+      const nativeStarted = await tryStartNativeScanning(constraints, onDecode);
+      if (!nativeStarted) {
+        usingNativeDetector = false;
+        codeReader = buildCodeReader();
+        const zxingOnDecode = (result, err) => {
+          if (result) onDecode(result.getText());
+          // NotFoundExceptionは「今のフレームでは見つからなかった」だけなので無視してよい
+        };
+        try {
+          if (typeof codeReader.decodeFromConstraints === "function") {
+            await codeReader.decodeFromConstraints(constraints, videoEl, zxingOnDecode);
+          } else {
+            await codeReader.decodeFromVideoDevice(fallbackDeviceId || undefined, videoEl, zxingOnDecode);
+          }
+        } catch (e2) {
+          await codeReader.decodeFromVideoDevice(fallbackDeviceId || undefined, videoEl, zxingOnDecode);
         }
-      } catch (e2) {
-        await codeReader.decodeFromVideoDevice(fallbackDeviceId || undefined, videoEl, onDecode);
       }
 
       await setupTrackCapabilities();
 
-      setStatus("読み取り中です。バーコードを枠の中に大きく映してください。", "ok");
+      setStatus(
+        usingNativeDetector
+          ? "読み取り中です（ブラウザ内蔵の高速スキャン機能を使用中）。バーコードを枠の中に大きく映してください。"
+          : "読み取り中です。バーコードを枠の中に大きく映してください。",
+        "ok"
+      );
       stopBtn.disabled = false;
     } catch (e) {
       setStatus("カメラを起動できませんでした: " + e.message + "（ブラウザのカメラ許可設定をご確認ください）", "err");
@@ -511,7 +587,10 @@
   function stopScanning() {
     if (codeReader) {
       try { codeReader.reset(); } catch (e) {}
+      codeReader = null;
     }
+    stopNativeScanning();
+    try { videoEl.srcObject = null; } catch (e) {}
     scanning = false;
     startBtn.disabled = false;
     stopBtn.disabled = true;
@@ -1070,12 +1149,9 @@
   }
 
   document.getElementById("genBtn").addEventListener("click", generateTestBarcode);
-  // サンプル1〜3は、カメラでの読み取りに強い「QRコード」で作成する
-  document.getElementById("genSample1").addEventListener("click", () => { document.getElementById("genValue").value = "SAMPLE-0001"; document.getElementById("genFormat").value = "QRCODE"; generateTestBarcode(); });
-  document.getElementById("genSample2").addEventListener("click", () => { document.getElementById("genValue").value = "SAMPLE-0002"; document.getElementById("genFormat").value = "QRCODE"; generateTestBarcode(); });
-  document.getElementById("genSample3").addEventListener("click", () => { document.getElementById("genValue").value = "SAMPLE-0003"; document.getElementById("genFormat").value = "QRCODE"; generateTestBarcode(); });
-  // 比較用に、従来の1次元バーコード（CODE128）版のサンプルも作れるようにしておく
-  document.getElementById("genSample1Linear").addEventListener("click", () => { document.getElementById("genValue").value = "SAMPLE-0001"; document.getElementById("genFormat").value = "CODE128"; generateTestBarcode(); });
+  document.getElementById("genSample1").addEventListener("click", () => { document.getElementById("genValue").value = "SAMPLE-0001"; document.getElementById("genFormat").value = "CODE128"; generateTestBarcode(); });
+  document.getElementById("genSample2").addEventListener("click", () => { document.getElementById("genValue").value = "SAMPLE-0002"; document.getElementById("genFormat").value = "CODE128"; generateTestBarcode(); });
+  document.getElementById("genSample3").addEventListener("click", () => { document.getElementById("genValue").value = "SAMPLE-0003"; document.getElementById("genFormat").value = "CODE128"; generateTestBarcode(); });
 
   genDownload.addEventListener("click", () => {
     const link = document.createElement("a");
