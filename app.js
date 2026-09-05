@@ -362,8 +362,12 @@
   function buildCodeReader() {
     const hints = new Map();
     const F = ZXing.BarcodeFormat;
+    // CODABARとITFは、他の形式(特にCODE128)のバーコードの一部を誤ってそれらしく
+    // 認識してしまう「誤読（クロスフォーマット誤検出）」を起こしやすいため対象から外している。
+    // 一般的な商品バーコード(JAN/EAN/UPC/CODE128/CODE39)であればこれで十分カバーできる。
+    // 実際にCODABARやITFのバーコードを読み取る必要が出てきた場合は、ここに戻してください。
     hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-      F.CODE_128, F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_39, F.CODABAR, F.ITF,
+      F.CODE_128, F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_39,
     ]);
     hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
     // 第2引数は読み取り試行の間隔(ms)。既定値の500msだと反応が遅く、フレームを
