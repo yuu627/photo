@@ -20,11 +20,8 @@
 
   /* ---------- 状態 ---------- */
   let tempMap = [];   // このセッション内で登録した一時対応（ブラウザに保存され、リロードしても残る）
-  let history = [];   // 確定済みスキャン履歴
-  let codeReader = null;
-  let scanning = false;
-  let paused = false;
-  let lastReceiptItems = null; // 直近プレビュー表示したレシートの元データ（複数バーコード分）[{barcode, photos:[...], label}, ...]
+  let history = [];   // 確定済み作成履歴
+  let lastReceiptItems = null; // 直近プレビュー表示したレシートの元データ（複数件分）[{barcode, photos:[...], label}, ...]
   let previewReceiptNo = null;
 
   const HISTORY_KEY = "receipt_photo_system_history_v1";
@@ -346,12 +343,8 @@
   renderMappingTable();
 
   /* =========================================================
-   * タブ①: カメラ / バーコードスキャン
+   * タブ①: 番号入力
    * ========================================================= */
-  const videoEl = document.getElementById("camera");
-  const cameraSelect = document.getElementById("cameraSelect");
-  const startBtn = document.getElementById("startBtn");
-  const stopBtn = document.getElementById("stopBtn");
   const scanStatus = document.getElementById("scanStatus");
 
   function setStatus(msg, kind) {
@@ -359,261 +352,9 @@
     scanStatus.className = "status-line" + (kind ? " " + kind : "");
   }
 
-  function buildCodeReader() {
-    const hints = new Map();
-    const F = ZXing.BarcodeFormat;
-    // CODABARとITFは、他の形式(特にCODE128)のバーコードの一部を誤ってそれらしく
-    // 認識してしまう「誤読（クロスフォーマット誤検出）」を起こしやすいため対象から外している。
-    // 一般的な商品バーコード(JAN/EAN/UPC/CODE128/CODE39)であればこれで十分カバーできる。
-    // 実際にCODABARやITFのバーコードを読み取る必要が出てきた場合は、ここに戻してください。
-    // QR_CODEは検出パターン（3隅の四角い目印）が1次元バーコードと全く異なり誤検出の
-    // リスクがほぼ無いため追加している。QRコードは誤り訂正機能を持ち、多少のボケや
-    // 画面のモアレがあっても読み取れることが多く、カメラでの読み取りに強い。
-    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-      F.CODE_128, F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_39, F.QR_CODE,
-    ]);
-    hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-    // 第2引数は読み取り試行の間隔(ms)。既定値の500msだと反応が遅く、フレームを
-    // 取りこぼして読み取り失敗につながりやすいため、短めにして読み取り精度(成功率)を上げる。
-    return new ZXing.BrowserMultiFormatReader(hints, 120);
-  }
-
-  let userPickedCamera = false; // ユーザーがカメラ選択欄を自分で操作したか
-  cameraSelect.addEventListener("change", () => { userPickedCamera = true; });
-
-  async function populateCameraList() {
-    try {
-      const devices = await ZXing.BrowserCodeReader.listVideoInputDevices();
-      cameraSelect.innerHTML = "";
-      devices.forEach((d, i) => {
-        const opt = document.createElement("option");
-        opt.value = d.deviceId;
-        opt.textContent = d.label || `カメラ ${i + 1}`;
-        cameraSelect.appendChild(opt);
-      });
-      // スマホ等で背面（リア）カメラらしきものが見つかれば、表示上はそれを選択済みにしておく
-      // （ラベルにback/rear/environment/背面などを含むものを背面カメラとみなす簡易判定）
-      const backIndex = devices.findIndex((d) => /back|rear|environment|背面/i.test(d.label || ""));
-      if (backIndex >= 0) cameraSelect.selectedIndex = backIndex;
-      return devices;
-    } catch (e) {
-      setStatus("カメラ一覧の取得に失敗しました: " + e.message, "err");
-      return [];
-    }
-  }
-
-  const torchBtn = document.getElementById("torchBtn");
-  let currentTrack = null; // 起動中カメラのvideo track（ライト制御・ケイパビリティ確認用）
-  let torchOn = false;
-
-  // ピント・露出・ホワイトバランスを継続的に自動調整させる（advancedなので非対応環境でも無視されるだけで安全）。
-  // 近距離のバーコードにピントが合わないことが読み取り失敗の主な原因の一つのため。
-  const ADVANCED_FOCUS_CONSTRAINTS = [
-    { focusMode: "continuous" },
-    { exposureMode: "continuous" },
-    { whiteBalanceMode: "continuous" },
-  ];
-
-  async function setupTrackCapabilities() {
-    try {
-      const stream = videoEl.srcObject;
-      currentTrack = stream ? stream.getVideoTracks()[0] : null;
-      if (currentTrack && typeof currentTrack.getCapabilities === "function") {
-        const caps = currentTrack.getCapabilities();
-        if (caps && caps.torch) {
-          torchBtn.style.display = "inline-block";
-        } else {
-          torchBtn.style.display = "none";
-        }
-      } else {
-        torchBtn.style.display = "none";
-      }
-      // ピント等をここでも明示的に試みる（decodeFromConstraints側で反映されない環境向けの保険）
-      if (currentTrack && typeof currentTrack.applyConstraints === "function") {
-        try { await currentTrack.applyConstraints({ advanced: ADVANCED_FOCUS_CONSTRAINTS }); } catch (e) {}
-      }
-    } catch (e) {
-      torchBtn.style.display = "none";
-    }
-  }
-
-  torchBtn.addEventListener("click", async () => {
-    if (!currentTrack) return;
-    const next = !torchOn;
-    try {
-      await currentTrack.applyConstraints({ advanced: [{ torch: next }] });
-      torchOn = next;
-      torchBtn.textContent = torchOn ? "💡 ライトOFF" : "💡 ライトON";
-    } catch (e) {
-      alert("このカメラはライトの制御に対応していないようです。");
-    }
-  });
-
-  /*
-   * ブラウザ内蔵の高速バーコード検出API（Shape Detection API / BarcodeDetector）。
-   * 対応しているブラウザ（主にAndroidのChrome/Edge、比較的新しいデスクトップ版Chrome/Edge）では、
-   * OS・ブラウザ側の最適化されたエンジン（Androidの場合Google製の高精度な検出エンジン相当）を
-   * 直接呼び出せるため、JavaScriptだけで実装されたZXingライブラリより高速・高精度に検出できることが多い。
-   * 非対応のブラウザ（iPhoneのSafariなど）では自動的にZXingへフォールバックする。
-   */
-  let usingNativeDetector = false;
-  let nativeDetector = null;
-  let nativeStream = null;
-  let nativeLoopActive = false;
-  let nativeLoopTimer = null;
-
-  const NATIVE_DESIRED_FORMATS = ["code_128", "ean_13", "ean_8", "upc_a", "upc_e", "code_39", "qr_code"];
-
-  async function tryStartNativeScanning(constraints, onDecode) {
-    if (typeof window.BarcodeDetector === "undefined") return false;
-    try {
-      const supported = await window.BarcodeDetector.getSupportedFormats();
-      const formats = NATIVE_DESIRED_FORMATS.filter((f) => supported.includes(f));
-      if (formats.length === 0) return false;
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      videoEl.srcObject = stream;
-      try { await videoEl.play(); } catch (e) {}
-      nativeStream = stream;
-      nativeDetector = new window.BarcodeDetector({ formats });
-      usingNativeDetector = true;
-      nativeLoopActive = true;
-
-      const tick = async () => {
-        if (!nativeLoopActive) return;
-        if (!paused && videoEl.readyState >= 2) {
-          try {
-            const results = await nativeDetector.detect(videoEl);
-            if (results && results.length) onDecode(results[0].rawValue);
-          } catch (e) {
-            // 1フレームの検出失敗は無視して次のフレームで再試行する
-          }
-        }
-        if (nativeLoopActive) nativeLoopTimer = setTimeout(tick, 120);
-      };
-      tick();
-      return true;
-    } catch (e) {
-      // getUserMedia失敗・非対応など。ZXing側へフォールバックする。
-      if (nativeStream) {
-        try { nativeStream.getTracks().forEach((t) => t.stop()); } catch (e2) {}
-        nativeStream = null;
-      }
-      return false;
-    }
-  }
-
-  function stopNativeScanning() {
-    nativeLoopActive = false;
-    if (nativeLoopTimer) { clearTimeout(nativeLoopTimer); nativeLoopTimer = null; }
-    if (nativeStream) {
-      try { nativeStream.getTracks().forEach((t) => t.stop()); } catch (e) {}
-      nativeStream = null;
-    }
-    nativeDetector = null;
-    usingNativeDetector = false;
-  }
-
-  async function startScanning() {
-    startBtn.disabled = true;
-    setStatus("カメラを起動しています…");
-    try {
-      const devices = await populateCameraList();
-      scanning = true;
-      paused = false;
-
-      const onDecode = (text) => {
-        if (!paused) handleDecoded(text);
-      };
-
-      // ユーザーがカメラ選択欄を自分で操作していない場合は、特定のdeviceIdに固定せず
-      // facingMode: environment（背面カメラ優先）に任せる。スマホは複数カメラを持つことが多く、
-      // 検出順の先頭が必ずしも背面カメラとは限らないため、deviceIdで固定すると
-      // 意図せずインカメラ（自撮り用）が選ばれてバーコードが読み取りにくくなることがあった。
-      const deviceId = userPickedCamera ? (cameraSelect.value || null) : null;
-
-      // 解像度を明示的に高めに指定すると、バーコードの読み取り精度が上がりやすい。
-      // advancedのフォーカス/露出/ホワイトバランス指定は対応していない環境では無視されるだけなので安全。
-      // 対応していない環境向けに、失敗時は従来の指定なし方式にフォールバックする。
-      const baseVideoConstraints = {
-        width: { ideal: 1920, min: 1280 },
-        height: { ideal: 1080, min: 720 },
-        frameRate: { ideal: 30 },
-        advanced: ADVANCED_FOCUS_CONSTRAINTS,
-      };
-      const constraints = {
-        video: Object.assign(
-          {},
-          baseVideoConstraints,
-          deviceId ? { deviceId: { exact: deviceId } } : { facingMode: { ideal: "environment" } }
-        ),
-      };
-      const fallbackDeviceId = deviceId || cameraSelect.value || (devices[0] && devices[0].deviceId);
-
-      const nativeStarted = await tryStartNativeScanning(constraints, onDecode);
-      if (!nativeStarted) {
-        usingNativeDetector = false;
-        codeReader = buildCodeReader();
-        const zxingOnDecode = (result, err) => {
-          if (result) onDecode(result.getText());
-          // NotFoundExceptionは「今のフレームでは見つからなかった」だけなので無視してよい
-        };
-        try {
-          if (typeof codeReader.decodeFromConstraints === "function") {
-            await codeReader.decodeFromConstraints(constraints, videoEl, zxingOnDecode);
-          } else {
-            await codeReader.decodeFromVideoDevice(fallbackDeviceId || undefined, videoEl, zxingOnDecode);
-          }
-        } catch (e2) {
-          await codeReader.decodeFromVideoDevice(fallbackDeviceId || undefined, videoEl, zxingOnDecode);
-        }
-      }
-
-      await setupTrackCapabilities();
-
-      setStatus(
-        usingNativeDetector
-          ? "読み取り中です（ブラウザ内蔵の高速スキャン機能を使用中）。バーコードを枠の中に大きく映してください。"
-          : "読み取り中です。バーコードを枠の中に大きく映してください。",
-        "ok"
-      );
-      stopBtn.disabled = false;
-    } catch (e) {
-      setStatus("カメラを起動できませんでした: " + e.message + "（ブラウザのカメラ許可設定をご確認ください）", "err");
-      startBtn.disabled = false;
-    }
-  }
-
-  function stopScanning() {
-    if (codeReader) {
-      try { codeReader.reset(); } catch (e) {}
-      codeReader = null;
-    }
-    stopNativeScanning();
-    try { videoEl.srcObject = null; } catch (e) {}
-    scanning = false;
-    startBtn.disabled = false;
-    stopBtn.disabled = true;
-    currentTrack = null;
-    torchOn = false;
-    torchBtn.style.display = "none";
-    torchBtn.textContent = "💡 ライトON";
-    setStatus("カメラを停止しました。");
-  }
-
-  startBtn.addEventListener("click", startScanning);
-  stopBtn.addEventListener("click", stopScanning);
-  cameraSelect.addEventListener("change", () => {
-    if (scanning) { stopScanning(); startScanning(); }
-  });
-
-  let lastDecodedText = null;
-  let cooldownTimer = null;
-
-  /* ---------- スキャン中の一覧（カート） ----------
-   * バーコードを読み取るたびにここへ1件ずつ追加していく。カメラは止めず、
-   * 複数のバーコードを続けて読み取れる。「レシートを作成」で、たまった
-   * 一覧をまとめて1枚のレシートにする。
+  /* ---------- 追加した一覧（カート） ----------
+   * 番号を入力するたびにここへ1件ずつ追加していく。複数の番号を続けて追加できる。
+   * 「レシートを作成」で、たまった一覧をまとめて1枚のレシートにする。
    */
   let cart = []; // { barcode, label, photos: [...] }
 
@@ -669,14 +410,14 @@
     renderReceiptPreview(cart);
   });
 
-  /* ---------- 手入力での追加（カメラでどうしても読み取れない場合の保険） ---------- */
+  /* ---------- 番号の入力 ---------- */
   const manualBarcodeInput = document.getElementById("manualBarcodeInput");
   const manualAddBtn = document.getElementById("manualAddBtn");
 
   function submitManualBarcode() {
     const val = manualBarcodeInput.value.trim();
     if (!val) return;
-    handleDecoded(val);
+    addToCart(val);
     manualBarcodeInput.value = "";
     manualBarcodeInput.focus();
   }
@@ -685,25 +426,15 @@
     if (e.key === "Enter") { e.preventDefault(); submitManualBarcode(); }
   });
 
-  function handleDecoded(text) {
-    if (text === lastDecodedText) return; // 直前と同じ検出は連続無視（クールダウン後にリセットされる）
-    lastDecodedText = text;
-    paused = true;
-    clearTimeout(cooldownTimer);
-
+  function addToCart(text) {
     const match = findMapping(text);
     if (!match) {
-      setStatus(`未登録のバーコードです（値: "${text}"）。②の対応表タブで登録してください。`, "warn");
-      // 3秒後に自動で再開して読み取りを続ける
-      cooldownTimer = setTimeout(() => { paused = false; lastDecodedText = null; setStatus("読み取り中です。バーコードをカメラに向けてください。", "ok"); }, 3000);
+      setStatus(`未登録の番号です（値: "${text}"）。②の対応表タブで登録してください。`, "warn");
       return;
     }
-
     cart.push({ barcode: text, label: match.label || "", photos: match.photos });
     renderCart();
-    setStatus(`バーコード "${text}" を追加しました（現在${cart.length}件）。続けて読み取れます。`, "ok");
-    // 短いクールダウンの後、自動で読み取りを再開する（同じバーコードを連続で二重追加しにくくする）
-    cooldownTimer = setTimeout(() => { paused = false; lastDecodedText = null; }, 1200);
+    setStatus(`番号 "${text}" を追加しました（現在${cart.length}件）。続けて入力できます。`, "ok");
   }
 
   /* ---------- レシート画像の生成（感熱レシート風デザイン） ---------- */
@@ -785,31 +516,6 @@
     ctx.restore();
   }
 
-  /* 上下端をギザギザ（ミシン目で切り取ったレシート風）にする */
-  function cutZigzagEdge(ctx, width, height, edge, toothWidth, depth) {
-    ctx.save();
-    ctx.globalCompositeOperation = "destination-out";
-    ctx.beginPath();
-    const teeth = Math.ceil(width / toothWidth) + 1;
-    if (edge === "top") {
-      ctx.moveTo(0, 0);
-      for (let i = 0; i <= teeth; i++) {
-        ctx.lineTo(i * toothWidth, i % 2 === 0 ? 0 : depth);
-      }
-      ctx.lineTo(width, 0);
-      ctx.closePath();
-    } else {
-      ctx.moveTo(0, height);
-      for (let i = 0; i <= teeth; i++) {
-        ctx.lineTo(i * toothWidth, height - (i % 2 === 0 ? 0 : depth));
-      }
-      ctx.lineTo(width, height);
-      ctx.closePath();
-    }
-    ctx.fill();
-    ctx.restore();
-  }
-
   function pad2(n) { return String(n).padStart(2, "0"); }
   function formatDate(d) {
     return `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
@@ -831,7 +537,6 @@
     const printMode = document.getElementById("printMode").value;
     const title = document.getElementById("receiptTitle").value || "PHOTO RECEIPT";
 
-    const zz = { tooth: Math.max(10, Math.round(paperWidth * 0.035)), depth: Math.max(5, Math.round(paperWidth * 0.018)) };
     const pad = Math.round(paperWidth * 0.07);
     const innerW = paperWidth - pad * 2;
 
@@ -868,7 +573,7 @@
     const itemBarcodeCanvases = items.map((it) => makeBarcodeCanvas(it.barcode));
 
     // ---- 高さを積算してキャンバスサイズを決定 ----
-    let y = zz.depth + pad;
+    let y = pad;
     y += titleFont + 4;                        // タイトル
     y += subFont + lineGap;                    // サブタイトル
     y += smallFont + lineGap;                  // 伝票番号・日時
@@ -890,7 +595,7 @@
     y += lineGap + 6;
     y += 4;                                    // 最終区切り線
     y += 6;                                     // 余裕分
-    y += pad + zz.depth;
+    y += pad;
 
     const canvasH = Math.round(y);
     receiptCanvas.width = paperWidth;
@@ -904,7 +609,7 @@
     ctx.textAlign = "center";
     ctx.fillStyle = "#1a1a1a";
 
-    let cy = zz.depth + pad;
+    let cy = pad;
 
     // タイトル（モノスペース・太字）
     ctx.font = `bold ${titleFont}px "Courier New", monospace`;
@@ -994,10 +699,6 @@
     // 印字モード（グレースケール／白黒2値）適用
     applyPrintMode(ctx, paperWidth, canvasH, printMode);
 
-    // 上下端をレシートのミシン目風に切り取る（最後に行う）
-    cutZigzagEdge(ctx, paperWidth, canvasH, "top", zz.tooth, zz.depth);
-    cutZigzagEdge(ctx, paperWidth, canvasH, "bottom", zz.tooth, zz.depth);
-
     receiptEmptyHint.style.display = "none";
     receiptWrap.style.display = "flex";
   }
@@ -1023,14 +724,14 @@
     history = history.slice(0, 100);
     saveHistory();
     renderHistory();
-    setStatus("履歴に記録しました。続けてバーコードを読み取れます。", "ok");
+    setStatus("履歴に記録しました。続けて番号を入力できます。", "ok");
     cart = [];
     renderCart();
     resetForNextScan();
   });
 
   document.getElementById("retryBtn").addEventListener("click", () => {
-    setStatus("一覧に戻りました。読み取りを続けるか、内容を調整してください。", "ok");
+    setStatus("一覧に戻りました。入力を続けるか、内容を調整してください。", "ok");
     resetForNextScan();
   });
 
@@ -1043,6 +744,25 @@
     link.download = `${name}.png`;
     link.href = receiptCanvas.toDataURL("image/png");
     link.click();
+  });
+
+  // PC向け：レシート画像を新しいタブに開いて、そのまま印刷ダイアログを表示する。
+  document.getElementById("printBtn").addEventListener("click", () => {
+    if (!lastReceiptItems) return;
+    const dataUrl = receiptCanvas.toDataURL("image/png");
+    const w = window.open("", "_blank");
+    if (!w) {
+      alert("新しいタブを開けませんでした。ブラウザのポップアップブロック設定をご確認ください。");
+      return;
+    }
+    w.document.write(
+      `<!DOCTYPE html><html><head><meta charset="utf-8"><title>印刷</title></head>` +
+      `<body style="text-align:center; margin-top:40px;">` +
+      `<img src="${dataUrl}" style="max-width:100%;">` +
+      `<script>window.onload=()=>window.print()<\/script>` +
+      `</body></html>`
+    );
+    w.document.close();
   });
 
   // iPhoneのSafariなどdownload属性が効かない環境向けの保存手段。
@@ -1095,57 +815,28 @@
   renderHistory();
 
   /* =========================================================
-   * タブ③: テスト用バーコード作成
+   * タブ③: バーコードラベル作成
    * ========================================================= */
   const genCanvas = document.getElementById("genCanvas");
   const genStatus = document.getElementById("genStatus");
   const genDownload = document.getElementById("genDownload");
   const genPrint = document.getElementById("genPrint");
 
-  function showGenError(msg) {
-    genStatus.style.display = "block";
-    genStatus.className = "status-line err";
-    genStatus.textContent = msg;
-    genDownload.style.display = "none";
-    genPrint.style.display = "none";
-  }
-
-  function showGenSuccess() {
-    genStatus.style.display = "none";
-    genDownload.style.display = "inline-block";
-    genPrint.style.display = "inline-block";
-  }
-
   function generateTestBarcode() {
     const value = document.getElementById("genValue").value.trim();
     const format = document.getElementById("genFormat").value;
     if (!value) { alert("値を入力してください。"); return; }
-
-    if (format === "QRCODE") {
-      if (typeof QRCode === "undefined") {
-        showGenError(
-          "QRコード生成ライブラリの読み込みに失敗しました（インターネット接続をご確認ください）。" +
-          "代わりに、お使いのブラウザで他のQRコード作成サイトから同じ値のQRコードを作成して" +
-          "印刷・表示していただいても、このアプリの読み取り側（①タブ）はそのまま使えます。"
-        );
-        return;
-      }
-      // QRCode.toCanvas は指定したcanvasに直接描画し、canvasの幅・高さも自動調整してくれる
-      QRCode.toCanvas(genCanvas, value, { width: 260, margin: 2 }, (err) => {
-        if (err) {
-          showGenError("QRコードを作成できませんでした: " + err.message);
-        } else {
-          showGenSuccess();
-        }
-      });
-      return;
-    }
-
     try {
       JsBarcode(genCanvas, value, { format, displayValue: true, fontSize: 18, height: 90, margin: 12 });
-      showGenSuccess();
+      genStatus.style.display = "none";
+      genDownload.style.display = "inline-block";
+      genPrint.style.display = "inline-block";
     } catch (e) {
-      showGenError("バーコードを作成できませんでした。形式と入力値を確認してください（例: EAN-13は12〜13桁の数字）。");
+      genStatus.style.display = "block";
+      genStatus.className = "status-line err";
+      genStatus.textContent = "バーコードを作成できませんでした。形式と入力値を確認してください（例: EAN-13は12〜13桁の数字）。";
+      genDownload.style.display = "none";
+      genPrint.style.display = "none";
     }
   }
 
